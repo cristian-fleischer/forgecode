@@ -16,6 +16,14 @@ pub const ENV_TERM_EXIT_CODES: &str = "_FORGE_TERM_EXIT_CODES";
 /// `\x1F`-separated Unix timestamps corresponding to [`ENV_TERM_COMMANDS`].
 pub const ENV_TERM_TIMESTAMPS: &str = "_FORGE_TERM_TIMESTAMPS";
 
+/// Environment variable exported by the zsh plugin containing
+/// `\x1F`-separated command outputs corresponding to [`ENV_TERM_COMMANDS`].
+///
+/// Each segment is the terminal output captured from the scrollback buffer
+/// for the corresponding command.  Empty segments indicate that no output
+/// was captured (e.g. the terminal does not support scrollback capture).
+pub const ENV_TERM_OUTPUTS: &str = "_FORGE_TERM_OUTPUTS";
+
 /// The separator used to join and split environment variable lists.
 ///
 /// ASCII Unit Separator (`\x1F`) is chosen because it cannot appear in
@@ -26,11 +34,12 @@ pub const ENV_LIST_SEPARATOR: char = '\x1F';
 /// Service that reads terminal context from environment variables exported by
 /// the zsh plugin and constructs a structured [`TerminalContext`].
 ///
-/// The zsh plugin exports three `\x1F`-separated environment variables before
-/// invoking forge:
+/// The zsh plugin exports up to four `\x1F`-separated environment variables
+/// before invoking forge:
 /// - [`ENV_TERM_COMMANDS`]   — the command strings
 /// - [`ENV_TERM_EXIT_CODES`] — the corresponding exit codes
 /// - [`ENV_TERM_TIMESTAMPS`] — the corresponding Unix timestamps
+/// - [`ENV_TERM_OUTPUTS`]    — the corresponding command outputs (optional)
 #[derive(Clone)]
 pub struct TerminalContextService<S>(Arc<S>);
 
@@ -69,17 +78,35 @@ impl<S: EnvironmentInfra<Config = forge_config::ForgeConfig>> TerminalContextSer
             .iter()
             .map(|s| s.parse::<u64>().unwrap_or(0))
             .collect();
-        // Zip the three lists together; pad missing exit codes/timestamps with 0.
-        // The outer zip() truncates to the length of `commands`, so the
-        // repeat() padding never produces extra entries.
+
+        // Outputs are optional — the variable may be absent entirely when the
+        // terminal does not support scrollback capture.  Individual segments
+        // may also be empty when a particular command's output was not found.
+        let outputs: Vec<Option<String>> = match self.0.get_env_var(ENV_TERM_OUTPUTS) {
+            Some(raw) => raw
+                .split(ENV_LIST_SEPARATOR)
+                .map(|s| {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+
+        // Zip the four lists together; pad missing exit codes/timestamps with
+        // 0 and missing outputs with None.  The outer zip() truncates to the
+        // length of `commands`, so the repeat()/cycle() padding never produces
+        // extra entries.
         let mut entries: Vec<TerminalCommand> = commands
             .into_iter()
             .zip(exit_codes.into_iter().chain(std::iter::repeat(0)))
             .zip(timestamps.into_iter().chain(std::iter::repeat(0)))
-            .map(|((command, exit_code), timestamp)| TerminalCommand {
+            .zip(outputs.into_iter().chain(std::iter::repeat(None)))
+            .map(|(((command, exit_code), timestamp), output)| TerminalCommand {
                 command,
                 exit_code,
                 timestamp,
+                output,
             })
             .collect();
 
@@ -180,6 +207,7 @@ mod tests {
                 command: "cargo build".to_string(),
                 exit_code: 0,
                 timestamp: 0,
+                output: None,
             }],
         });
         assert_eq!(actual, expected);
@@ -206,16 +234,19 @@ mod tests {
                     command: "ls".to_string(),
                     exit_code: 0,
                     timestamp: 1700000001,
+                    output: None,
                 },
                 TerminalCommand {
                     command: "cargo test".to_string(),
                     exit_code: 1,
                     timestamp: 1700000002,
+                    output: None,
                 },
                 TerminalCommand {
                     command: "git status".to_string(),
                     exit_code: 0,
                     timestamp: 1700000003,
+                    output: None,
                 },
             ],
         });
@@ -280,16 +311,19 @@ mod tests {
                     command: "ls".to_string(),
                     exit_code: 0,
                     timestamp: 1700000001,
+                    output: None,
                 },
                 TerminalCommand {
                     command: "cargo test".to_string(),
                     exit_code: 1,
                     timestamp: 1700000002,
+                    output: None,
                 },
                 TerminalCommand {
                     command: "git status".to_string(),
                     exit_code: 0,
                     timestamp: 1700000003,
+                    output: None,
                 },
             ],
         });
@@ -313,5 +347,107 @@ mod tests {
         ]));
         let actual = fixture.get_terminal_context();
         assert_eq!(actual.unwrap().commands.len(), 3);
+    }
+
+    #[test]
+    fn test_commands_with_outputs() {
+        let sep = ENV_LIST_SEPARATOR;
+        let fixture = TerminalContextService::new(MockInfra::new(&[
+            (ENV_TERM_COMMANDS, &format!("ls{sep}cargo build")),
+            (ENV_TERM_EXIT_CODES, &format!("0{sep}101")),
+            (ENV_TERM_TIMESTAMPS, &format!("1700000001{sep}1700000002")),
+            (
+                ENV_TERM_OUTPUTS,
+                &format!("file1.txt\nfile2.rs{sep}error[E0308]: mismatched types"),
+            ),
+        ]));
+        let actual = fixture.get_terminal_context();
+        let expected = Some(TerminalContext {
+            commands: vec![
+                TerminalCommand {
+                    command: "ls".to_string(),
+                    exit_code: 0,
+                    timestamp: 1700000001,
+                    output: Some("file1.txt\nfile2.rs".to_string()),
+                },
+                TerminalCommand {
+                    command: "cargo build".to_string(),
+                    exit_code: 101,
+                    timestamp: 1700000002,
+                    output: Some("error[E0308]: mismatched types".to_string()),
+                },
+            ],
+        });
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_partial_outputs() {
+        let sep = ENV_LIST_SEPARATOR;
+        let fixture = TerminalContextService::new(MockInfra::new(&[
+            (ENV_TERM_COMMANDS, &format!("ls{sep}cd /tmp{sep}pwd")),
+            (ENV_TERM_EXIT_CODES, &format!("0{sep}0{sep}0")),
+            (
+                ENV_TERM_TIMESTAMPS,
+                &format!("1700000001{sep}1700000002{sep}1700000003"),
+            ),
+            (ENV_TERM_OUTPUTS, &format!("file1.txt{sep}{sep}/tmp")),
+        ]));
+        let actual = fixture.get_terminal_context();
+        let expected = Some(TerminalContext {
+            commands: vec![
+                TerminalCommand {
+                    command: "ls".to_string(),
+                    exit_code: 0,
+                    timestamp: 1700000001,
+                    output: Some("file1.txt".to_string()),
+                },
+                TerminalCommand {
+                    command: "cd /tmp".to_string(),
+                    exit_code: 0,
+                    timestamp: 1700000002,
+                    output: None,
+                },
+                TerminalCommand {
+                    command: "pwd".to_string(),
+                    exit_code: 0,
+                    timestamp: 1700000003,
+                    output: Some("/tmp".to_string()),
+                },
+            ],
+        });
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_no_outputs_env_var() {
+        // When _FORGE_TERM_OUTPUTS is absent, all outputs should be None.
+        let sep = ENV_LIST_SEPARATOR;
+        let fixture = TerminalContextService::new(MockInfra::new(&[
+            (ENV_TERM_COMMANDS, &format!("ls{sep}pwd")),
+            (ENV_TERM_EXIT_CODES, &format!("0{sep}0")),
+            (
+                ENV_TERM_TIMESTAMPS,
+                &format!("1700000001{sep}1700000002"),
+            ),
+        ]));
+        let actual = fixture.get_terminal_context();
+        let expected = Some(TerminalContext {
+            commands: vec![
+                TerminalCommand {
+                    command: "ls".to_string(),
+                    exit_code: 0,
+                    timestamp: 1700000001,
+                    output: None,
+                },
+                TerminalCommand {
+                    command: "pwd".to_string(),
+                    exit_code: 0,
+                    timestamp: 1700000002,
+                    output: None,
+                },
+            ],
+        });
+        assert_eq!(actual, expected);
     }
 }

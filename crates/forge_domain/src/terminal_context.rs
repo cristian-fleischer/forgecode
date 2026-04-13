@@ -7,6 +7,12 @@ pub struct TerminalCommand {
     pub exit_code: i32,
     /// Unix timestamp (seconds since epoch) when the command was run.
     pub timestamp: u64,
+    /// The terminal output produced by the command, captured from scrollback.
+    ///
+    /// `None` when the terminal does not support scrollback capture or the
+    /// command output was not found in the scrollback buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
 }
 
 /// Structured terminal context captured by the shell plugin.
@@ -37,6 +43,7 @@ impl TerminalContext {
                 command,
                 exit_code,
                 timestamp,
+                output: None,
             })
             .collect();
         Self { commands: entries }

@@ -26,7 +26,8 @@ user_prompt: |-
   {{#if terminal_context}}
   <command_trace>
   {{#each terminal_context.commands}}
-  <command exit_code="{{exit_code}}">{{command}}</command>
+  <command exit_code="{{exit_code}}">{{command}}{{#if output}}
+  <output>{{output}}</output>{{/if}}</command>
   {{/each}}
   </command_trace>
   {{/if}}

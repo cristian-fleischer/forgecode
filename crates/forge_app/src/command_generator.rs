@@ -77,9 +77,13 @@ where
             Some(ctx) => {
                 let terminal_elm =
                     Element::new("command_trace").append(ctx.commands.iter().map(|cmd| {
-                        Element::new("command")
+                        let mut el = Element::new("command")
                             .attr("exit_code", cmd.exit_code.to_string())
-                            .text(&cmd.command)
+                            .text(&cmd.command);
+                        if let Some(ref output) = cmd.output {
+                            el = el.append(Element::new("output").text(output));
+                        }
+                        el
                     }));
                 format!("{}\n\n{}", terminal_elm.render(), task_elm.render())
             }
@@ -172,6 +176,18 @@ mod tests {
             env_vars.insert("_FORGE_TERM_COMMANDS".to_string(), commands.to_string());
             env_vars.insert("_FORGE_TERM_EXIT_CODES".to_string(), exit_codes.to_string());
             env_vars.insert("_FORGE_TERM_TIMESTAMPS".to_string(), timestamps.to_string());
+            Arc::new(Self {
+                files: self.files.clone(),
+                response: self.response.clone(),
+                captured_context: self.captured_context.clone(),
+                environment: self.environment.clone(),
+                env_vars,
+            })
+        }
+
+        fn and_outputs(self: Arc<Self>, outputs: &str) -> Arc<Self> {
+            let mut env_vars = self.env_vars.clone();
+            env_vars.insert("_FORGE_TERM_OUTPUTS".to_string(), outputs.to_string());
             Arc::new(Self {
                 files: self.files.clone(),
                 response: self.response.clone(),
@@ -384,6 +400,35 @@ mod tests {
         assert!(user_content.contains("</command_trace>"));
         assert!(user_content.contains("cargo build"));
         assert!(user_content.contains("<task>fix the command I just ran</task>"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_shell_context_and_output() {
+        let fixture = MockServices::new(
+            r#"{"command": "cargo build --release"}"#,
+            vec![("Cargo.toml", false)],
+        )
+        .with_terminal_context("cargo build", "101", "1700000000")
+        .and_outputs("error[E0308]: mismatched types");
+        let generator = CommandGenerator::new(fixture.clone());
+
+        let actual = generator
+            .generate(UserPrompt::from("fix the command I just ran".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(actual, "cargo build --release");
+        let captured_context = fixture.captured_context.lock().await.clone().unwrap();
+        let user_content = captured_context
+            .messages
+            .iter()
+            .find(|m| m.has_role(Role::User))
+            .expect("should have a user message")
+            .content()
+            .expect("user message should have content");
+        assert!(user_content.contains("<output>"));
+        assert!(user_content.contains("error[E0308]: mismatched types"));
+        assert!(user_content.contains("</output>"));
     }
 
     #[tokio::test]

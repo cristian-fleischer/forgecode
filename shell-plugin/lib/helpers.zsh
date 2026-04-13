@@ -38,6 +38,9 @@ function _forge_exec() {
         local -x _FORGE_TERM_COMMANDS="${_FORGE_TERM_COMMANDS[*]}"
         local -x _FORGE_TERM_EXIT_CODES="${_FORGE_TERM_EXIT_CODES[*]}"
         local -x _FORGE_TERM_TIMESTAMPS="${_FORGE_TERM_TIMESTAMPS[*]}"
+        if [[ ${#_FORGE_TERM_OUTPUTS} -gt 0 ]]; then
+            local -x _FORGE_TERM_OUTPUTS="${_FORGE_TERM_OUTPUTS[*]}"
+        fi
         IFS="$_old_ifs"
     fi
 
@@ -72,6 +75,9 @@ function _forge_exec_interactive() {
         local -x _FORGE_TERM_COMMANDS="${_FORGE_TERM_COMMANDS[*]}"
         local -x _FORGE_TERM_EXIT_CODES="${_FORGE_TERM_EXIT_CODES[*]}"
         local -x _FORGE_TERM_TIMESTAMPS="${_FORGE_TERM_TIMESTAMPS[*]}"
+        if [[ ${#_FORGE_TERM_OUTPUTS} -gt 0 ]]; then
+            local -x _FORGE_TERM_OUTPUTS="${_FORGE_TERM_OUTPUTS[*]}"
+        fi
         IFS="$_old_ifs"
     fi
 

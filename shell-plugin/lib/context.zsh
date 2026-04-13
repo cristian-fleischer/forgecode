@@ -55,6 +55,58 @@ function _forge_osc133_emit() {
 }
 
 # ---------------------------------------------------------------------------
+# Terminal scrollback capture
+# ---------------------------------------------------------------------------
+
+# Captures raw scrollback text from the terminal. The amount captured is
+# controlled by _FORGE_TERM_SCROLLBACK_LINES.
+# Returns the scrollback on stdout, or returns 1 if unavailable.
+# Priority: Kitty > WezTerm > Zellij > tmux > none
+function _forge_capture_scrollback() {
+    local lines="${_FORGE_TERM_SCROLLBACK_LINES:-1000}"
+    local output=""
+
+    # Priority 1: Kitty — get full scrollback (OSC 133 aware)
+    if [[ -n "${KITTY_PID:-}" ]] && command -v kitty &>/dev/null; then
+        output=$(kitty @ get-text --extent=all 2>/dev/null)
+        if [[ -n "$output" ]]; then
+            echo "$output" | tail -"$lines"
+            return 0
+        fi
+    fi
+
+    # Priority 2: WezTerm
+    if [[ "${TERM_PROGRAM:-}" == "WezTerm" ]] && command -v wezterm &>/dev/null; then
+        output=$(wezterm cli get-text 2>/dev/null)
+        if [[ -n "$output" ]]; then
+            echo "$output" | tail -"$lines"
+            return 0
+        fi
+    fi
+
+    # Priority 3: Zellij — full scrollback dump
+    if [[ -n "${ZELLIJ:-}" ]] && command -v zellij &>/dev/null; then
+        output=$(zellij action dump-screen --full 2>/dev/null)
+        if [[ -n "$output" ]]; then
+            echo "$output" | tail -"$lines"
+            return 0
+        fi
+    fi
+
+    # Priority 4: tmux scrollback
+    if [[ -n "${TMUX:-}" ]] && command -v tmux &>/dev/null; then
+        output=$(tmux capture-pane -p -S -"$lines" 2>/dev/null)
+        if [[ -n "$output" ]]; then
+            echo "$output"
+            return 0
+        fi
+    fi
+
+    # No terminal-specific capture available
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # preexec / precmd hooks
 # ---------------------------------------------------------------------------
 
@@ -95,11 +147,32 @@ function _forge_context_precmd() {
         _FORGE_TERM_EXIT_CODES+=("$last_exit")
         _FORGE_TERM_TIMESTAMPS+=("$_FORGE_TERM_PENDING_TS")
 
+        # Capture command output from scrollback.  At precmd time the
+        # scrollback ends cleanly with this command's output — no forge
+        # responses or future prompts to pollute the extraction.
+        local _output=""
+        if [[ "$_FORGE_TERM_OUTPUT_ENABLED" == "true" ]]; then
+            local _scrollback _cmd_line _max_lines="${_FORGE_TERM_MAX_LINES_PER_CMD:-200}"
+            _scrollback=$(_forge_capture_scrollback 2>/dev/null)
+            if [[ -n "$_scrollback" ]]; then
+                _cmd_line=$(echo "$_scrollback" | grep -n -F -- "$_FORGE_TERM_PENDING_CMD" | tail -1 | cut -d: -f1)
+                if [[ -n "$_cmd_line" ]]; then
+                    _output=$(echo "$_scrollback" | tail -n "+$((_cmd_line + 1))" | head -"$_max_lines")
+                    # Strip trailing blank lines
+                    while [[ "$_output" == *$'\n' ]]; do
+                        _output="${_output%$'\n'}"
+                    done
+                fi
+            fi
+        fi
+        _FORGE_TERM_OUTPUTS+=("$_output")
+
         # Trim ring buffer to max size
         while (( ${#_FORGE_TERM_COMMANDS} > _FORGE_TERM_MAX_COMMANDS )); do
             shift _FORGE_TERM_COMMANDS
             shift _FORGE_TERM_EXIT_CODES
             shift _FORGE_TERM_TIMESTAMPS
+            shift _FORGE_TERM_OUTPUTS
         done
 
         _FORGE_TERM_PENDING_CMD=""
@@ -110,6 +183,7 @@ function _forge_context_precmd() {
     _forge_osc133_emit "A"
 }
 
+# ---------------------------------------------------------------------------
 # Hook registration
 
 # Register using standard zsh hook arrays for coexistence with other plugins.

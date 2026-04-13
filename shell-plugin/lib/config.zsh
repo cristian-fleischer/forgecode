@@ -44,9 +44,20 @@ typeset -h _FORGE_SESSION_REASONING_EFFORT
 typeset -h _FORGE_TERM_ENABLED="${FORGE_TERM_ENABLED:-true}"
 # Maximum number of commands to keep in the ring buffer (metadata: cmd + exit code)
 typeset -h _FORGE_TERM_MAX_COMMANDS="${FORGE_TERM_MAX_COMMANDS:-5}"
+# Master switch for terminal output capture (scrollback extraction).
+# Independent from _FORGE_TERM_ENABLED which controls command metadata.
+# Defaults to false so that users explicitly opt in before their terminal
+# scrollback is sent to the LLM — scrollback can contain passwords, API
+# keys, and other sensitive data.
+typeset -h _FORGE_TERM_OUTPUT_ENABLED="${FORGE_TERM_OUTPUT_ENABLED:-false}"
+# Maximum output lines per command block
+typeset -h _FORGE_TERM_MAX_LINES_PER_CMD="${FORGE_TERM_MAX_LINES_PER_CMD:-200}"
+# Scrollback lines to capture from the terminal for command block extraction
+typeset -h _FORGE_TERM_SCROLLBACK_LINES="${FORGE_TERM_SCROLLBACK_LINES:-1000}"
 # OSC 133 semantic prompt marker emission: "auto", "on", or "off"
 typeset -h _FORGE_TERM_OSC133="${FORGE_TERM_OSC133:-auto}"
 # Ring buffer arrays for context capture
 typeset -ha _FORGE_TERM_COMMANDS=()
 typeset -ha _FORGE_TERM_EXIT_CODES=()
 typeset -ha _FORGE_TERM_TIMESTAMPS=()
+typeset -ha _FORGE_TERM_OUTPUTS=()
